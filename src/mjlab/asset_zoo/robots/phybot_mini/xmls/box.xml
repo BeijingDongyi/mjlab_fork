@@ -1,0 +1,22 @@
+<mujoco>
+  <visual>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3" />
+  </visual>
+
+  <worldbody>
+<!--  所有freejoint放在末尾-->
+<!--    <light name="main_light" pos="0 0 3" dir="0 0 -1" diffuse="1 1 1" specular="0.3 0.3 0.3" directional="true" />-->
+    <body name="object" pos="0.0 0.0 0.0" quat="1 0 0 0">
+      <joint name="obj_free" type="free"/>
+      <geom name="floating_box_collision"
+        type="box"
+        pos="-1.6 0 0.2"
+        size="0.1 0.1 0.2"
+        rgba="0.3 0.3 0.3 0.3"
+        contype="1"
+        conaffinity="1"/>
+      <site name="grasp_left" pos="-1.6 -0.1 0.15" size="0.03" rgba="1 0 0 1"/>
+      <site name="grasp_right" pos="-1.6 0.1 0.15" size="0.03" rgba="0 0 1 1"/>
+    </body>
+  </worldbody>
+</mujoco>

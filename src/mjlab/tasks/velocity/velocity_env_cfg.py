@@ -75,7 +75,7 @@ class CommandsCfg:
     heading_control_stiffness=0.5,
     debug_vis=True,
     ranges=mdp.UniformVelocityCommandCfg.Ranges(
-      lin_vel_x=(-1.0, 1.0),
+      lin_vel_x=(-1.0, 1.5),
       lin_vel_y=(-0.5, 0.5),
       ang_vel_z=(-1.0, 1.0),
       heading=(-math.pi, math.pi),
@@ -89,14 +89,23 @@ class ObservationCfg:
   class PolicyCfg(ObsGroup):
     base_lin_vel: ObsTerm = term(
       ObsTerm,
-      func=mdp.base_lin_vel,
-      noise=Unoise(n_min=-0.1, n_max=0.1),
+      func=mdp.builtin_sensor,
+      params={"sensor_name": "robot/linear-velocity"},
+      noise=Unoise(n_min=-0.5, n_max=0.5),
     )
+
     base_ang_vel: ObsTerm = term(
-      ObsTerm,
-      func=mdp.base_ang_vel,
-      noise=Unoise(n_min=-0.2, n_max=0.2),
+        ObsTerm,
+        func=mdp.builtin_sensor,
+        params={"sensor_name": "robot/angular-velocity", },
+        noise=Unoise(n_min=-0.2, n_max=0.2),
     )
+    # base_lin_acc: ObsTerm = term(
+    #   ObsTerm,
+    #   func=mdp.builtin_sensor,
+    #   params={"sensor_name": "robot/imu_acc",},
+    #   noise=Unoise(n_min=-0.2, n_max=0.2),
+    # )
     projected_gravity: ObsTerm = term(
       ObsTerm,
       func=mdp.projected_gravity,
@@ -123,6 +132,26 @@ class ObservationCfg:
 
   @dataclass
   class PrivilegedCfg(PolicyCfg):
+    base_lin_vel: ObsTerm = term(ObsTerm, func=mdp.base_lin_vel)
+    foot_height: ObsTerm = term(
+      ObsTerm,
+      func=mdp.foot_height,
+      params={
+        "asset_cfg": SceneEntityCfg("robot", geom_names=[])  # Override in robot cfg.
+      },
+      )
+    foot_air_time: ObsTerm = term(
+      ObsTerm,
+      func=mdp.foot_air_time,
+      params={
+        "sensor_name": "feet_ground_contact",
+      },
+      )
+    foot_contact: ObsTerm = term(
+      ObsTerm,
+      func=mdp.foot_contact,
+      params={"sensor_name": "feet_ground_contact"},)
+
     def __post_init__(self):
       super().__post_init__()
       self.enable_corruption = False
@@ -174,43 +203,92 @@ class EventCfg:
 
 @dataclass
 class RewardCfg:
-  track_lin_vel_exp: RewardTerm = term(
+  track_linear_velocity: RewardTerm = term(
     RewardTerm,
-    func=mdp.track_lin_vel_exp,
-    weight=1.0,
+    func=mdp.track_linear_velocity,
+    weight=5.0,
     params={"command_name": "twist", "std": math.sqrt(0.25)},
   )
-  track_ang_vel_exp: RewardTerm = term(
+  track_angular_velocity: RewardTerm = term(
     RewardTerm,
-    func=mdp.track_ang_vel_exp,
-    weight=1.0,
+    func=mdp.track_angular_velocity,
+    weight=4.0,
     params={"command_name": "twist", "std": math.sqrt(0.25)},
+  )
+  upright: RewardTerm = term(
+    RewardTerm,
+    func=mdp.flat_orientation,
+    weight=1.0,
+    params={"std": math.sqrt(0.1)},
   )
   pose: RewardTerm = term(
     RewardTerm,
-    func=mdp.posture,
+    func=mdp.variable_posture,
     weight=1.0,
     params={
       "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
-      "std": [],
+      "std_standing": {},  # Override in robot cfg.
+      "std_moving": {},  # Override in robot cfg.
+      "command_name": "twist",
+      "command_threshold": 0.05,
     },
   )
   dof_pos_limits: RewardTerm = term(RewardTerm, func=mdp.joint_pos_limits, weight=-1.0)
   action_rate_l2: RewardTerm = term(RewardTerm, func=mdp.action_rate_l2, weight=-0.1)
 
-  # Unused, only here as an example.
+  # Rewards feet being airborne for 0.05-0.5 seconds.
+  # Lift your feet off the ground and keep them up for a reasonable amount of time.
   air_time: RewardTerm = term(
     RewardTerm,
     func=mdp.feet_air_time,
-    weight=0.0,
+    weight=1.5,
     params={
-      "asset_name": "robot",
+      "sensor_name": "feet_ground_contact",
       "threshold_min": 0.05,
-      "threshold_max": 0.15,
+      "threshold_max": 0.45,
+      "command_name": "twist",
+      "command_threshold": 0.5,
+    },
+  )
+  # Guide the foot height during the swing phase.
+  # Large penalty when foot is moving fast and far from target height.
+  # This is a dense reward.
+  foot_clearance: RewardTerm = term(
+    RewardTerm,
+    func=mdp.feet_clearance,
+    weight=-2.0,
+    params={
+      "target_height": 0.1,
       "command_name": "twist",
       "command_threshold": 0.05,
-      "sensor_names": [],
-      "reward_mode": "on_landing",
+      "asset_cfg": SceneEntityCfg("robot", geom_names=[]),
+    },
+  )
+  # Tracks peak height during swing. Did you actually reach 0.1m at some point?
+  # This is a sparse reward, only evaluated at landing.
+  foot_swing_height: RewardTerm = term(
+    RewardTerm,
+    func=mdp.feet_swing_height,
+    weight=-0.25,
+    params={
+      "sensor_name": "feet_ground_contact",
+      "target_height": 0.15,
+      "command_name": "twist",
+      "command_threshold": 0.05,
+      "num_feet": 2,
+      "asset_cfg": SceneEntityCfg("robot", geom_names=[]),  # Override in robot cfg.
+    },
+  )
+  # Don't slide when foot is on ground.
+  foot_slip: RewardTerm = term(
+    RewardTerm,
+    func=mdp.feet_slip,
+    weight=-0.1,
+    params={
+      "sensor_name": "feet_ground_contact",
+      "command_name": "twist",
+      "command_threshold": 0.05,
+      "asset_cfg": SceneEntityCfg("robot", geom_names=[]),  # Override in robot cfg.
     },
   )
 
@@ -221,7 +299,12 @@ class TerminationCfg:
   fell_over: DoneTerm = term(
     DoneTerm, func=mdp.bad_orientation, params={"limit_angle": math.radians(70.0)}
   )
-
+  illegal_contact: DoneTerm | None = term(
+    DoneTerm,
+    func=mdp.illegal_contact,
+    params={"sensor_name": "nonfoot_ground_touch"},
+  )
+  min_height: DoneTerm = term(DoneTerm, func=mdp.root_height_below_minimum, params={"minimum_height": 0.35})
 
 @dataclass
 class CurriculumCfg:
@@ -246,10 +329,10 @@ class CurriculumCfg:
 ##
 
 SIM_CFG = SimulationCfg(
-  nconmax=140_000,
+  nconmax=35,
   njmax=300,
   mujoco=MujocoCfg(
-    timestep=0.005,
+    timestep=0.002,
     iterations=10,
     ls_iterations=20,
   ),
@@ -268,7 +351,7 @@ class LocomotionVelocityEnvCfg(ManagerBasedRlEnvCfg):
   curriculum: CurriculumCfg = field(default_factory=CurriculumCfg)
   sim: SimulationCfg = field(default_factory=lambda: SIM_CFG)
   viewer: ViewerConfig = field(default_factory=lambda: VIEWER_CONFIG)
-  decimation: int = 4  # 50 Hz control frequency.
+  decimation: int = 10  # 50 Hz control frequency.
   episode_length_s: float = 20.0
 
   def __post_init__(self):
@@ -276,3 +359,127 @@ class LocomotionVelocityEnvCfg(ManagerBasedRlEnvCfg):
     if self.scene.terrain is not None:
       if self.scene.terrain.terrain_generator is not None:
         self.scene.terrain.terrain_generator.curriculum = True
+
+  # track_lin_vel_exp: RewardTerm = term(
+  #   RewardTerm,
+  #   func=mdp.track_lin_vel_exp,
+  #   weight=10.0,
+  #   params={"command_name": "twist", "std": math.sqrt(0.25)},
+  # )
+  #
+  # track_ang_vel_exp: RewardTerm = term(
+  #   RewardTerm,
+  #   func=mdp.track_ang_vel_exp,
+  #   weight=9.0,
+  #   params={"command_name": "twist", "std": math.sqrt(0.25)},
+  # )
+  #
+  # pose: RewardTerm = term(
+  #   RewardTerm,
+  #   func=mdp.posture,
+  #   weight=5.0,
+  #   params={
+  #     "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
+  #     "std": [],
+  #   },
+  # )
+  # is_alive: RewardTerm = term(RewardTerm, func=mdp.is_alive, weight=1.0,)
+  #
+  # # stance: RewardTerm = term(RewardTerm, func=mdp.stance_defaultpos, weight=90.0, params={"command_name": "twist"},)
+  #
+  # nofly: RewardTerm = term(RewardTerm,func=mdp.no_fly, weight=-6.0,params={"sensor_names": ["left_foot_ground_contact", "right_foot_ground_contact"],})
+  #
+  # action_rate: RewardTerm = term(RewardTerm, func=mdp.action_rate_l2, weight=-0.25,)
+  #
+  # dof_pos_limits: RewardTerm = term(RewardTerm, func=mdp.joint_pos_limits, weight=-50.0)
+  #
+  # torso_ang_vel_xy: RewardTerm = term(RewardTerm, func=mdp.torso_ang_vel_xy, weight=-4.0, )
+  #
+  # torso_orientation: RewardTerm = term(RewardTerm, func=mdp.flat_orientation_l2, weight=-10.0,)
+  #
+  # dof_acc: RewardTerm = term(RewardTerm, func=mdp.joint_acc_l2, weight=-2.5e-7,)
+  #
+  # joint_vel_l2: RewardTerm = term(RewardTerm, func=mdp.joint_vel_l2, weight=-0.015,)
+  #
+  # energy: RewardTerm = term(RewardTerm, func=mdp.electrical_power_cost, weight=-0.001,)
+  #
+  # angmom: RewardTerm = term(RewardTerm,func=mdp.angmom_reward,weight=3.0,)
+  #
+  # self_collision_cost: RewardTerm = term(RewardTerm, func=mdp.self_collision_cost,weight=-50.0,)
+  #
+  # # stumble: RewardTerm = term(
+  # #     RewardTerm,
+  # #     func=mdp.stumble_penalty,
+  # #     weight=-1.0,
+  # #     params={"sensor_names": ["left_foot_ground_contact", "right_foot_ground_contact"],},
+  # # )
+  #
+  # feet_ori_xy: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_ori_xy,
+  #     weight=2.5,
+  #     params={"body_ids": [6, 12], "scale": 5.0},
+  # )
+  #
+  # feet_ori_z: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_ori_z,
+  #     weight=1.4,
+  #     params={"body_ids": [6, 12], "scale": 2.0},
+  # )
+  #
+  # feet_distance: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_distance_exp,
+  #     weight=1.5,
+  #     params={
+  #         "left_geom_id": 16,
+  #         "right_geom_id": 34,
+  #         "target_y_offset": 0.14,
+  #         "scale": 15.0,
+  #     },
+  # )
+  #
+  # feet_swing_height: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_swing_height,
+  #     weight=6.0,
+  #     params={
+  #         "asset_name": "robot",
+  #         "target_height": 0.15,
+  #         "contact_threshold": 1.0,
+  #         "sensor_names": ["left_foot_ground_contact", "right_foot_ground_contact"],
+  #         "geom_ids": [16, 34],
+  #         "command_name": "twist",
+  #         "command_threshold": 0.15,
+  #     },
+  # )
+  #
+  # # # Unused, only here as an example.
+  # air_time: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_air_time,
+  #     weight=500,
+  #     params={
+  #         "asset_name": "robot",
+  #         "sensor_names": ["left_foot_ground_contact", "right_foot_ground_contact"],
+  #         "target_time": 0.4,
+  #         "contact_threshold": 0.1,
+  #         "command_name": "twist",
+  #         "command_threshold": 0.15,
+  #     },
+  # )
+  #
+  # feet_stance_time_target: RewardTerm = term(
+  #     RewardTerm,
+  #     func=mdp.feet_stance_time_target,
+  #     weight=500.0,
+  #     params={
+  #         "asset_name": "robot",
+  #         "sensor_names": ["left_foot_ground_contact", "right_foot_ground_contact"],
+  #         "target_time": 0.40,
+  #         "contact_threshold": 0.1,
+  #         "command_name": "twist",
+  #         "command_threshold": 0.15,
+  #     },
+  # )

@@ -13,6 +13,8 @@ from mjlab.third_party.isaaclab.isaaclab.utils.math import (
   quat_apply_inverse,
   quat_from_euler_xyz,
   quat_mul,
+  quat_apply,
+  quat_from_angle_axis,
   sample_gaussian,
   sample_log_uniform,
   sample_uniform,
@@ -24,7 +26,10 @@ if TYPE_CHECKING:
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
-def reset_scene_to_default(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
+def reset_scene_to_default(env: ManagerBasedEnv, env_ids: torch.Tensor | None) -> None:
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+
   for entity in env.scene.entities.values():
     if not isinstance(entity, Entity):
       continue
@@ -42,43 +47,86 @@ def reset_scene_to_default(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
 
 def reset_root_state_uniform(
   env: ManagerBasedEnv,
-  env_ids: torch.Tensor,
+  env_ids: torch.Tensor | None,
   pose_range: dict[str, tuple[float, float]],
-  velocity_range: dict[str, tuple[float, float]],
+  velocity_range: dict[str, tuple[float, float]] | None = None,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
-  asset: Entity = env.scene[asset_cfg.name]
-  default_root_state = asset.data.default_root_state
-  assert default_root_state is not None
-  root_states = default_root_state[env_ids].clone()
+  """Reset root state for floating-base or mocap fixed-base entities.
 
-  # Positions.
+  For floating-base entities: Resets pose and velocity via write_root_state_to_sim().
+  For fixed-base mocap entities: Resets pose only via write_mocap_pose_to_sim().
+
+  Args:
+    env: The environment.
+    env_ids: Environment IDs to reset. If None, resets all environments.
+    pose_range: Dictionary with keys {"x", "y", "z", "roll", "pitch", "yaw"}.
+    velocity_range: Velocity range (only used for floating-base entities).
+    asset_cfg: Asset configuration.
+  """
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+
+  asset: Entity = env.scene[asset_cfg.name]
+
+  # Pose.
   range_list = [
     pose_range.get(key, (0.0, 0.0)) for key in ["x", "y", "z", "roll", "pitch", "yaw"]
   ]
   ranges = torch.tensor(range_list, device=env.device)
-  rand_samples = sample_uniform(
+  pose_samples = sample_uniform(
     ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=env.device
   )
 
+  # Fixed-based entities with mocap=True.
+  if asset.is_fixed_base:
+    if not asset.is_mocap:
+      raise ValueError(
+        f"Cannot reset root state for fixed-base non-mocap entity '{asset_cfg.name}'."
+      )
+
+    default_root_state = asset.data.default_root_state
+    assert default_root_state is not None
+    root_states = default_root_state[env_ids].clone()
+
+    positions = (
+      root_states[:, 0:3] + pose_samples[:, 0:3] + env.scene.env_origins[env_ids]
+    )
+    orientations_delta = quat_from_euler_xyz(
+      pose_samples[:, 3], pose_samples[:, 4], pose_samples[:, 5]
+    )
+    orientations = quat_mul(root_states[:, 3:7], orientations_delta)
+
+    asset.write_mocap_pose_to_sim(
+      torch.cat([positions, orientations], dim=-1), env_ids=env_ids
+    )
+    return
+
+  # Floating-base entities.
+  default_root_state = asset.data.default_root_state
+  assert default_root_state is not None
+  root_states = default_root_state[env_ids].clone()
+
   positions = (
-    root_states[:, 0:3] + rand_samples[:, 0:3] + env.scene.env_origins[env_ids]
+    root_states[:, 0:3] + pose_samples[:, 0:3] + env.scene.env_origins[env_ids]
   )
   orientations_delta = quat_from_euler_xyz(
-    rand_samples[:, 3], rand_samples[:, 4], rand_samples[:, 5]
+    pose_samples[:, 3], pose_samples[:, 4], pose_samples[:, 5]
   )
   orientations = quat_mul(root_states[:, 3:7], orientations_delta)
 
   # Velocities.
+  if velocity_range is None:
+    velocity_range = {}
   range_list = [
     velocity_range.get(key, (0.0, 0.0))
     for key in ["x", "y", "z", "roll", "pitch", "yaw"]
   ]
   ranges = torch.tensor(range_list, device=env.device)
-  rand_samples = sample_uniform(
+  vel_samples = sample_uniform(
     ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=env.device
   )
-  velocities = root_states[:, 7:13] + rand_samples
+  velocities = root_states[:, 7:13] + vel_samples
 
   asset.write_root_link_pose_to_sim(
     torch.cat([positions, orientations], dim=-1), env_ids=env_ids
@@ -87,20 +135,79 @@ def reset_root_state_uniform(
   velocities[:, 3:] = quat_apply_inverse(orientations, velocities[:, 3:])
   asset.write_root_link_velocity_to_sim(velocities, env_ids=env_ids)
 
+def reset_entity_fixed_default(
+    env,
+    env_ids,
+    *,
+    box_name: str,
+):
+    scene = env.scene
+    box = scene[box_name]
+    default_root_state = box.data.default_root_state  # shape: [num_envs, 13]
+    root_state = default_root_state[env_ids].clone()
+    box.write_root_state_to_sim(root_state, env_ids=env_ids)
+
+def reset_entity_to_default(
+    env,
+    env_ids,
+    *,
+    box_name: str,
+    robot_name: str,
+    relative_to=None,
+    offset=(0.0, 0.0, 0.0),
+    rand_range=(0.03, 0.03, 0.02),
+    rand_rot_deg=5.0,
+):
+    """预先重置机器人并且拿到机器人root的位置,重置box到机器人肩上"""
+    scene = env.scene
+    robot = scene[robot_name]
+    box = scene[box_name]
+##拿机器人位置
+    qadr = robot._data.indexing.free_joint_q_adr
+    robot_qpos = robot._data.data.qpos[env_ids][:, qadr]  # [n,7]
+    robot_pos = robot_qpos[:, :3]
+    robot_quat = robot_qpos[:, 3:7]
+##世界坐标系下转换，因为机器人在世界系下是对称的，而box有偏移，不能直接抄过来
+    offset_local = torch.tensor(offset, dtype=robot_pos.dtype, device=robot_pos.device)
+    offset_local = offset_local.unsqueeze(0).expand(robot_pos.shape[0], -1)  # (N,3)
+    offset_world = quat_apply(robot_quat, offset_local)  # (N,3)
+##位置随机化
+    # rand_range_t = torch.tensor(rand_range, dtype=robot_pos.dtype, device=robot_pos.device)
+    # noise = (torch.rand_like(robot_pos) * 2 - 1.0) * rand_range_t  # [-rand, +rand]随机数
+    # box_pos = robot_pos + offset_world + noise
+    box_pos = robot_pos + offset_world
+##旋转随机化
+    # rand_axis = torch.randn_like(robot_pos)
+    # rand_axis = rand_axis / (rand_axis.norm(dim=-1, keepdim=True) + 1e-8)
+    # max_angle = rand_rot_deg * torch.pi / 180.0
+    # rand_angle = (torch.rand(robot_pos.shape[0], device=robot_pos.device) * 2 - 1.0) * max_angle
+    # rand_quat = quat_from_angle_axis(rand_angle, rand_axis)
+    # box_quat = quat_mul(rand_quat, robot_quat)
+    box_quat = robot_quat.clone()
+##box状态写入
+    root = box.data.default_root_state[env_ids].clone()
+    root[:, 0:3] = box_pos
+    root[:, 3:7] = box_quat
+    root[:, 7:] = 0.0
+    box.write_root_state_to_sim(root, env_ids=env_ids)
 
 def reset_joints_by_scale(
   env: ManagerBasedEnv,
-  env_ids: torch.Tensor,
+  env_ids: torch.Tensor | None,
   position_range: tuple[float, float],
   velocity_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+
   asset: Entity = env.scene[asset_cfg.name]
   default_joint_pos = asset.data.default_joint_pos
   assert default_joint_pos is not None
   default_joint_vel = asset.data.default_joint_vel
   assert default_joint_vel is not None
   soft_joint_pos_limits = asset.data.soft_joint_pos_limits
+  # print(soft_joint_pos_limits)
   assert soft_joint_pos_limits is not None
 
   joint_pos = default_joint_pos[env_ids][:, asset_cfg.joint_ids].clone()
@@ -199,6 +306,7 @@ FIELD_SPECS = {
   # Geom - uses IDs directly.
   "geom_friction": FieldSpec("geom", default_axes=[0], valid_axes=[0, 1, 2]),
   "geom_pos": FieldSpec("geom", default_axes=[0, 1, 2]),
+  # "geom_size": FieldSpec("geom", default_axes=[0, 1, 2]),
   "geom_quat": FieldSpec("geom", default_axes=[0, 1, 2, 3]),
   "geom_rgba": FieldSpec("geom", default_axes=[0, 1, 2, 3]),
   # Site - uses IDs directly.
@@ -237,7 +345,7 @@ def randomize_field(
     )
 
   spec = FIELD_SPECS[field]
-  asset_cfg = asset_cfg or _DEFAULT_ASSET_CFG
+  asset_cfg = asset_cfg or _DEFAULT_ASSET_CFG #逻辑或，如果有指定entity就=asset，若没有就为default
   asset = env.scene[asset_cfg.name]
 
   if env_ids is None:

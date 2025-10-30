@@ -118,7 +118,7 @@ FEET_ONLY_COLLISION = CollisionCfg(
 # Foot collisions are given custom condim, friction and solimp.
 FULL_COLLISION = CollisionCfg(
   geom_names_expr=[".*_collision"],
-  condim={_foot_regex: 3},
+  condim={_foot_regex: 3, ".*_collision": 1},
   priority={_foot_regex: 1},
   friction={_foot_regex: (0.6,)},
   solimp={_foot_regex: (0.9, 0.95, 0.023)},
@@ -157,3 +157,13 @@ for a in GO1_ARTICULATION.actuators:
   for n in names:
     if n in e and n in s and s[n]:
       GO1_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
+
+
+if __name__ == "__main__":
+  import mujoco.viewer as viewer
+
+  from mjlab.entity.entity import Entity
+
+  robot = Entity(GO1_ROBOT_CFG)
+
+  viewer.launch(robot.spec.compile())

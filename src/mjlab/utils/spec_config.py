@@ -23,7 +23,7 @@ _MARK_MAP = {
 }
 
 _GEOM_ATTR_DEFAULTS = {
-  "condim": 1,
+  "condim": 3,
   "contype": 1,
   "conaffinity": 1,
   "priority": 0,
@@ -45,45 +45,6 @@ _CAM_LIGHT_MODE_MAP = {
   "targetbodycom": mujoco.mjtCamLight.mjCAMLIGHT_TARGETBODYCOM,
 }
 
-_SENSOR_TYPE_MAP = {
-  "gyro": mujoco.mjtSensor.mjSENS_GYRO,
-  "upvector": mujoco.mjtSensor.mjSENS_FRAMEZAXIS,
-  "velocimeter": mujoco.mjtSensor.mjSENS_VELOCIMETER,
-  "framequat": mujoco.mjtSensor.mjSENS_FRAMEQUAT,
-  "framepos": mujoco.mjtSensor.mjSENS_FRAMEPOS,
-  "framelinvel": mujoco.mjtSensor.mjSENS_FRAMELINVEL,
-  "frameangvel": mujoco.mjtSensor.mjSENS_FRAMEANGVEL,
-  "framezaxis": mujoco.mjtSensor.mjSENS_FRAMEZAXIS,
-  "accelerometer": mujoco.mjtSensor.mjSENS_ACCELEROMETER,
-  "contact": mujoco.mjtSensor.mjSENS_CONTACT,
-  "subtreeangmom": mujoco.mjtSensor.mjSENS_SUBTREEANGMOM,
-}
-
-_SENSOR_OBJECT_TYPE_MAP = {
-  "site": mujoco.mjtObj.mjOBJ_SITE,
-  "geom": mujoco.mjtObj.mjOBJ_GEOM,
-  "body": mujoco.mjtObj.mjOBJ_BODY,
-  "xbody": mujoco.mjtObj.mjOBJ_XBODY,
-}
-
-
-_CONTACT_DATA_MAP = {
-  "found": 0,
-  "force": 1,
-  "torque": 2,
-  "dist": 3,
-  "pos": 4,
-  "normal": 5,
-  "tangent": 6,
-}
-
-_CONTACT_REDUCE_MAP = {
-  "none": 0,
-  "mindist": 1,
-  "maxforce": 2,
-  "netforce": 3,
-}
-
 
 @dataclass
 class SpecCfg(ABC):
@@ -103,14 +64,23 @@ class TextureCfg(SpecCfg):
   """Configuration to add a texture to the MuJoCo spec."""
 
   name: str
+  """Name of the texture."""
   type: Literal["2d", "cube", "skybox"]
+  """Texture type ("2d", "cube", or "skybox")."""
   builtin: Literal["checker", "gradient", "flat", "none"]
+  """Built-in texture pattern ("checker", "gradient", "flat", or "none")."""
   rgb1: tuple[float, float, float]
+  """First RGB color tuple."""
   rgb2: tuple[float, float, float]
+  """Second RGB color tuple."""
   width: int
+  """Texture width in pixels (must be positive)."""
   height: int
+  """Texture height in pixels (must be positive)."""
   mark: Literal["edge", "cross", "random", "none"] = "none"
+  """Marking pattern ("edge", "cross", "random", or "none")."""
   markrgb: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  """RGB color for markings."""
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     self.validate()
@@ -137,10 +107,15 @@ class MaterialCfg(SpecCfg):
   """Configuration to add a material to the MuJoCo spec."""
 
   name: str
+  """Name of the material."""
   texuniform: bool
+  """Whether texture is uniform."""
   texrepeat: tuple[int, int]
+  """Texture repeat pattern (width, height) - both must be positive."""
   reflectance: float = 0.0
+  """Material reflectance value."""
   texture: str | None = None
+  """Name of texture to apply (optional)."""
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     self.validate()
@@ -160,17 +135,33 @@ class MaterialCfg(SpecCfg):
 
 @dataclass
 class CollisionCfg(SpecCfg):
-  """Configuration to modify collision properties of geoms in the MuJoCo spec."""
+  """Configuration to modify collision properties of geoms in the MuJoCo spec.
+
+  Supports regex pattern matching for geom names and dict-based field resolution
+  for fine-grained control over collision properties.
+  """
 
   geom_names_expr: list[str]
+  """List of regex patterns to match geom names."""
   contype: int | dict[str, int] = 1
+  """Collision type (int or dict mapping patterns to values). Must be non-negative."""
   conaffinity: int | dict[str, int] = 1
+  """Collision affinity (int or dict mapping patterns to values). Must be
+  non-negative."""
   condim: int | dict[str, int] = 3
+  """Contact dimension (int or dict mapping patterns to values). Must be one
+  of {1, 3, 4, 6}."""
   priority: int | dict[str, int] = 0
+  """Collision priority (int or dict mapping patterns to values). Must be
+  non-negative."""
   friction: tuple[float, ...] | dict[str, tuple[float, ...]] | None = None
+  """Friction coefficients as tuple or dict mapping patterns to tuples."""
   solref: tuple[float, ...] | dict[str, tuple[float, ...]] | None = None
+  """Solver reference parameters as tuple or dict mapping patterns to tuples."""
   solimp: tuple[float, ...] | dict[str, tuple[float, ...]] | None = None
+  """Solver impedance parameters as tuple or dict mapping patterns to tuples."""
   disable_other_geoms: bool = True
+  """Whether to disable collision for non-matching geoms."""
 
   @staticmethod
   def set_array_field(field, values):
@@ -178,6 +169,39 @@ class CollisionCfg(SpecCfg):
       return
     for i, v in enumerate(values):
       field[i] = v
+
+  def validate(self) -> None:
+    """Validate collision configuration parameters."""
+    valid_condim = {1, 3, 4, 6}
+
+    # Validate condim specifically (has special valid values).
+    if isinstance(self.condim, int):
+      if self.condim not in valid_condim:
+        raise ValueError(f"condim must be one of {valid_condim}, got {self.condim}")
+    elif isinstance(self.condim, dict):
+      for pattern, value in self.condim.items():
+        if value not in valid_condim:
+          raise ValueError(
+            f"condim must be one of {valid_condim}, got {value} for pattern '{pattern}'"
+          )
+
+    # Validate other int parameters.
+    if isinstance(self.contype, int) and self.contype < 0:
+      raise ValueError("contype must be non-negative")
+    if isinstance(self.conaffinity, int) and self.conaffinity < 0:
+      raise ValueError("conaffinity must be non-negative")
+    if isinstance(self.priority, int) and self.priority < 0:
+      raise ValueError("priority must be non-negative")
+
+    # Validate dict parameters (excluding condim which is handled above).
+    for field_name in ["contype", "conaffinity", "priority"]:
+      field_value = getattr(self, field_name)
+      if isinstance(field_value, dict):
+        for pattern, value in field_value.items():
+          if value < 0:
+            raise ValueError(
+              f"{field_name} must be non-negative, got {value} for pattern '{pattern}'"
+            )
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     from mjlab.utils.spec import disable_collision
@@ -218,15 +242,25 @@ class LightCfg(SpecCfg):
   """Configuration to add a light to the MuJoCo spec."""
 
   name: str | None = None
+  """Name of the light (optional)."""
   body: str = "world"
+  """Body to attach light to (default: "world")."""
   mode: str = "fixed"
+  """Light mode ("fixed", "track", "trackcom", "targetbody", "targetbodycom")."""
   target: str | None = None
+  """Target body for tracking modes (optional)."""
   type: Literal["spot", "directional"] = "spot"
+  """Light type ("spot" or "directional")."""
   castshadow: bool = True
+  """Whether light casts shadows."""
   pos: tuple[float, float, float] = (0, 0, 0)
+  """Light position (x, y, z)."""
   dir: tuple[float, float, float] = (0, 0, -1)
+  """Light direction vector (x, y, z)."""
   cutoff: float = 45
+  """Spot light cutoff angle in degrees."""
   exponent: float = 10
+  """Spot light exponent."""
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     self.validate()
@@ -255,12 +289,19 @@ class CameraCfg(SpecCfg):
   """Configuration to add a camera to the MuJoCo spec."""
 
   name: str
+  """Name of the camera."""
   body: str = "world"
+  """Body to attach camera to (default: "world")."""
   mode: str = "fixed"
+  """Camera mode ("fixed", "track", "trackcom", "targetbody", "targetbodycom")."""
   target: str | None = None
+  """Target body for tracking modes (optional)."""
   fovy: float = 45
+  """Field of view in degrees."""
   pos: tuple[float, float, float] = (0, 0, 0)
+  """Camera position (x, y, z)."""
   quat: tuple[float, float, float, float] = (1, 0, 0, 0)
+  """Camera orientation quaternion (w, x, y, z)."""
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     self.validate()
@@ -283,20 +324,25 @@ class CameraCfg(SpecCfg):
 
 @dataclass
 class ActuatorCfg:
-  """Configuration for PD-controlled actuators applied to joints."""
+  """Configuration for PD-controlled actuators applied to joints.
+
+  Configures position-controlled actuators with PD control parameters,
+  effort limits, and joint properties. Supports regex pattern matching
+  for joint names.
+  """
 
   joint_names_expr: list[str]
   """List of regex patterns to match joint names."""
   effort_limit: float
-  """Maximum force/torque the actuator can apply."""
+  """Maximum force/torque the actuator can apply (must be positive)."""
   stiffness: float
-  """Position gain (P-gain) for PD control."""
+  """Position gain (P-gain) for PD control (must be non-negative)."""
   damping: float
-  """Velocity gain (D-gain) for PD control."""
+  """Velocity gain (D-gain) for PD control (must be non-negative)."""
   frictionloss: float = 0.0
-  """Joint friction loss coefficient."""
+  """Joint friction loss coefficient (must be non-negative)."""
   armature: float = 0.0
-  """Rotor inertia or reflected inertia for the joint."""
+  """Rotor inertia or reflected inertia for the joint (must be non-negative)."""
 
 
 @dataclass
@@ -310,6 +356,7 @@ class ActuatorSetCfg(SpecCfg):
   """
 
   cfgs: tuple[ActuatorCfg, ...]
+  """Tuple of ActuatorCfg instances to apply."""
 
   def edit_spec(self, spec: mujoco.MjSpec) -> None:
     from mjlab.utils.spec import get_non_free_joints, is_joint_limited
@@ -328,6 +375,17 @@ class ActuatorSetCfg(SpecCfg):
       matched = filter_exp(cfg.joint_names_expr, joint_names)
       for joint_name in matched:
         cfg_joint_pairs.append((cfg, joint_name))
+
+    # Check if any joints were matched (only if there are actuator configs).
+    if self.cfgs and not cfg_joint_pairs:
+      patterns = [f"'{expr}'" for cfg in self.cfgs for expr in cfg.joint_names_expr]
+      available_joints = (
+        [f"'{name}'" for name in joint_names] if joint_names else ["(none)"]
+      )
+      raise ValueError(
+        f"No joints matched actuator patterns {', '.join(patterns)}. "
+        f"Available joints: {', '.join(available_joints)}"
+      )
 
     # Sort by joint order in spec (maintains deterministic ordering).
     cfg_joint_pairs.sort(key=lambda pair: joint_names.index(pair[1]))
@@ -368,154 +426,3 @@ class ActuatorSetCfg(SpecCfg):
         raise ValueError(f"frictionloss must be non-negative, got {cfg.frictionloss}")
       if cfg.armature < 0:
         raise ValueError(f"armature must be non-negative, got {cfg.armature}")
-
-
-@dataclass
-class SensorCfg(SpecCfg):
-  """Configuration to add a sensor to the MuJoCo spec."""
-
-  name: str
-  sensor_type: Literal[
-    "gyro",
-    "upvector",
-    "velocimeter",
-    "framequat",
-    "framepos",
-    "framelinvel",
-    "frameangvel",
-    "framezaxis",
-    "accelerometer",
-    "contact",
-    "subtreeangmom",
-  ]
-  objtype: Literal["xbody", "body", "geom", "site"]
-  objname: str
-  reftype: Literal["xbody", "body", "geom", "site"] | None = None
-  refname: str | None = None
-
-  def edit_spec(self, spec: mujoco.MjSpec) -> None:
-    self.validate()
-
-    sns = spec.add_sensor(
-      name=self.name,
-      type=_SENSOR_TYPE_MAP[self.sensor_type],
-      objtype=_SENSOR_OBJECT_TYPE_MAP[self.objtype],
-      objname=self.objname,
-    )
-    if self.reftype is not None and self.refname is not None:
-      sns.reftype = _SENSOR_OBJECT_TYPE_MAP[self.reftype]
-      sns.refname = self.refname
-
-
-@dataclass
-class ContactSensorCfg(SpecCfg):
-  """Configuration for a contact sensor.
-
-  Selects contacts from mjData.contact using intersection of specified criteria.
-  Must specify a primary object (geom1/body1/subtree1/site), and optionally a
-  secondary object (geom2/body2/subtree2) to match contacts between them.
-
-  Examples:
-    - ContactSensorCfg(name="hand_contacts", body1="hand")  # Any contact with hand
-    - ContactSensorCfg(name="self_collisions", subtree1="arm", subtree2="arm")  # Arm self-collisions
-    - ContactSensorCfg(name="table_contacts", geom1="table", body2="robot")  # Table-robot contacts
-    - ContactSensorCfg(name="in_zone", site="zone1")  # Contacts within zone1 volume
-
-  Ref: https://mujoco.readthedocs.io/en/stable/XMLreference.html#sensor-contact
-  """
-
-  name: str
-
-  # Primary object (exactly one must be specified).
-  geom1: str | None = None
-  body1: str | None = None
-  subtree1: str | None = None
-  site: str | None = None
-
-  # Secondary object (all optional).
-  geom2: str | None = None
-  body2: str | None = None
-  subtree2: str | None = None
-
-  num: int = 1
-  data: tuple[
-    Literal["found", "force", "torque", "dist", "pos", "normal", "tangent"], ...
-  ] = ("found",)
-  reduce: Literal["none", "mindist", "maxforce", "netforce"] = "none"
-
-  def _construct_intprm(self) -> list[int]:
-    """Construct the intprm parameter for contact sensors."""
-    if self.num <= 0:
-      raise ValueError("'num' must be positive")
-
-    if self.data:
-      values = [_CONTACT_DATA_MAP[k] for k in self.data]
-      for i in range(1, len(values)):
-        if values[i] <= values[i - 1]:
-          raise ValueError(
-            f"Data attributes must be in order: {', '.join(_CONTACT_DATA_MAP.keys())}"
-          )
-      dataspec = sum(1 << v for v in values)
-    else:
-      dataspec = 1
-
-    return [dataspec, _CONTACT_REDUCE_MAP[self.reduce], self.num]
-
-  def validate(self) -> None:
-    # Exactly one primary object must be specified.
-    group1_count = sum(
-      x is not None for x in [self.geom1, self.body1, self.subtree1, self.site]
-    )
-    if group1_count != 1:
-      raise ValueError(
-        "Exactly one of geom1, body1, subtree1, or site must be specified"
-      )
-
-    # At most one secondary object.
-    group2_count = sum(x is not None for x in [self.geom2, self.body2, self.subtree2])
-    if group2_count > 1:
-      raise ValueError("At most one of geom2, body2, subtree2 can be specified")
-
-    # Site can only be used with group2 objects (not alone or with group1).
-    if self.site is not None and group2_count == 0:
-      raise ValueError(
-        "Site must be used with a secondary object (geom2, body2, or subtree2)"
-      )
-
-  def edit_spec(self, spec: mujoco.MjSpec) -> None:
-    self.validate()
-
-    # Determine primary object (exactly one will be set due to validation).
-    if self.geom1 is not None:
-      objtype = mujoco.mjtObj.mjOBJ_GEOM
-      objname = self.geom1
-    elif self.body1 is not None:
-      objtype = mujoco.mjtObj.mjOBJ_BODY
-      objname = self.body1
-    elif self.subtree1 is not None:
-      objtype = mujoco.mjtObj.mjOBJ_XBODY
-      objname = self.subtree1
-    else:  # self.site must be not None.
-      objtype = mujoco.mjtObj.mjOBJ_SITE
-      objname = self.site
-
-    sensor_kwargs = {
-      "name": self.name,
-      "type": mujoco.mjtSensor.mjSENS_CONTACT,
-      "objtype": objtype,
-      "objname": objname,
-      "intprm": self._construct_intprm(),
-    }
-
-    # Add secondary object if specified.
-    if self.geom2 is not None:
-      sensor_kwargs["reftype"] = mujoco.mjtObj.mjOBJ_GEOM
-      sensor_kwargs["refname"] = self.geom2
-    elif self.body2 is not None:
-      sensor_kwargs["reftype"] = mujoco.mjtObj.mjOBJ_BODY
-      sensor_kwargs["refname"] = self.body2
-    elif self.subtree2 is not None:
-      sensor_kwargs["reftype"] = mujoco.mjtObj.mjOBJ_XBODY
-      sensor_kwargs["refname"] = self.subtree2
-
-    spec.add_sensor(**sensor_kwargs)

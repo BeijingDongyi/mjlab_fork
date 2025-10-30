@@ -6,7 +6,7 @@ Robot-specific configurations are located in the config/ directory.
 This is a re-implementation of BeyondMimic (https://beyondmimic.github.io/).
 
 Based on https://github.com/HybridRobotics/whole_body_tracking
-Commit: d763c6af1eb25c1341b8104e1c53eaae5ad9ae00
+Commit: f8e20c880d9c8ec7172a13d3a88a65e3a5a88448
 """
 
 from dataclasses import dataclass, field
@@ -93,8 +93,8 @@ class ObservationCfg:
   class PolicyCfg(ObsGroup):
     command: ObsTerm = term(
       ObsTerm, func=mdp.generated_commands, params={"command_name": "motion"}
-    )
-    motion_anchor_pos_b: ObsTerm = term(
+    )#遥控器command
+    motion_anchor_pos_b: ObsTerm | None = term(
       ObsTerm,
       func=mdp.motion_anchor_pos_b,
       params={"command_name": "motion"},
@@ -106,7 +106,7 @@ class ObservationCfg:
       params={"command_name": "motion"},
       noise=Unoise(n_min=-0.05, n_max=0.05),
     )
-    base_lin_vel: ObsTerm = term(
+    base_lin_vel: ObsTerm | None = term(
       ObsTerm, func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)
     )
     base_ang_vel: ObsTerm = term(
@@ -152,6 +152,14 @@ class ObservationCfg:
 
 @dataclass
 class EventCfg:
+
+  reset_box: EventTerm = term(
+      EventTerm,
+      func=mdp.reset_entity_fixed_default,
+      mode="reset",
+      params={"box_name": "box"},
+  )
+
   push_robot: EventTerm | None = term(
     EventTerm,
     func=mdp.push_by_setting_velocity,
@@ -159,6 +167,7 @@ class EventCfg:
     interval_range_s=(1.0, 3.0),
     params={"velocity_range": VELOCITY_RANGE},
   )
+
   base_com: EventTerm = term(
     EventTerm,
     mode="startup",
@@ -281,7 +290,7 @@ class TerminationsCfg:
 
 
 SIM_CFG = SimulationCfg(
-  nconmax=150_000,
+  nconmax=35,
   njmax=250,
   mujoco=MujocoCfg(
     timestep=0.005,

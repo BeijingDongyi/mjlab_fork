@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import mujoco
 import numpy as np
@@ -11,6 +11,7 @@ import torch
 
 from mjlab.managers import CommandTerm, CommandTermCfg
 from mjlab.third_party.isaaclab.isaaclab.utils.math import (
+  matrix_from_quat,
   quat_apply,
   quat_apply_inverse,
   quat_error_magnitude,
@@ -20,10 +21,13 @@ from mjlab.third_party.isaaclab.isaaclab.utils.math import (
   sample_uniform,
   yaw_quat,
 )
+from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 if TYPE_CHECKING:
   from mjlab.entity import Entity
   from mjlab.envs import ManagerBasedRlEnv
+
+_DESIRED_FRAME_COLORS = ((1.0, 0.5, 0.5), (0.5, 1.0, 0.5), (0.5, 0.5, 1.0))
 
 
 class MotionLoader:
@@ -33,18 +37,10 @@ class MotionLoader:
     data = np.load(motion_file)
     self.joint_pos = torch.tensor(data["joint_pos"], dtype=torch.float32, device=device)
     self.joint_vel = torch.tensor(data["joint_vel"], dtype=torch.float32, device=device)
-    self._body_pos_w = torch.tensor(
-      data["body_pos_w"], dtype=torch.float32, device=device
-    )
-    self._body_quat_w = torch.tensor(
-      data["body_quat_w"], dtype=torch.float32, device=device
-    )
-    self._body_lin_vel_w = torch.tensor(
-      data["body_lin_vel_w"], dtype=torch.float32, device=device
-    )
-    self._body_ang_vel_w = torch.tensor(
-      data["body_ang_vel_w"], dtype=torch.float32, device=device
-    )
+    self._body_pos_w = torch.tensor(data["body_pos_w"], dtype=torch.float32, device=device)
+    self._body_quat_w = torch.tensor(data["body_quat_w"], dtype=torch.float32, device=device)
+    self._body_lin_vel_w = torch.tensor(data["body_lin_vel_w"], dtype=torch.float32, device=device)
+    self._body_ang_vel_w = torch.tensor(data["body_ang_vel_w"], dtype=torch.float32, device=device)
     self._body_indexes = body_indexes
     self.time_step_total = self.joint_pos.shape[0]
 
@@ -124,15 +120,9 @@ class MotionCommand(CommandTerm):
     self.metrics["sampling_top1_prob"] = torch.zeros(self.num_envs, device=self.device)
     self.metrics["sampling_top1_bin"] = torch.zeros(self.num_envs, device=self.device)
 
-    self._model_viz: mujoco.MjModel = copy.deepcopy(env.sim.mj_model)
-    self._model_viz.geom_rgba[:, 1] = np.clip(
-      self._model_viz.geom_rgba[:, 1] * 1.5, 0.0, 1.0
-    )
-    self._data_viz = mujoco.MjData(self._model_viz)
-    self._vopt = mujoco.MjvOption()
-    self._vopt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = True
-    self._pert = mujoco.MjvPerturb()
-    self._catmask = mujoco.mjtCatBit.mjCAT_DYNAMIC
+    # Ghost model created lazily on first visualization
+    self._ghost_model: mujoco.MjModel | None = None
+    self._ghost_color = np.array(cfg.viz.ghost_color, dtype=np.float32)
 
   @property
   def command(self) -> torch.Tensor:
@@ -288,7 +278,9 @@ class MotionCommand(CommandTerm):
       sampling_probabilities, len(env_ids), replacement=True
     )
     self.time_steps[env_ids] = (
-      sampled_bins / self.bin_count * (self.motion.time_step_total - 1)
+      (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
+      / self.bin_count
+      * (self.motion.time_step_total - 1)
     ).long()
 
     # Update metrics.
@@ -300,7 +292,10 @@ class MotionCommand(CommandTerm):
     self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
   def _resample_command(self, env_ids: torch.Tensor):
-    self._adaptive_sampling(env_ids)
+    if self.cfg.disable_adaptive_sampling:
+      self.time_steps[env_ids] = 0
+    else:
+      self._adaptive_sampling(env_ids)
 
     root_pos = self.body_pos_w[:, 0].clone()
     root_ori = self.body_quat_w[:, 0].clone()
@@ -397,32 +392,70 @@ class MotionCommand(CommandTerm):
     )
     self._current_bin_failed.zero_()
 
-  def _debug_vis_impl(self, scn: mujoco.MjvScene) -> None:
-    for i in range(self.num_envs):
+  def _debug_vis_impl(self, visualizer: DebugVisualizer) -> None:
+    """Draw ghost robot or frames based on visualization mode."""
+    if self.cfg.viz.mode == "ghost":
+      if self._ghost_model is None:
+        self._ghost_model = copy.deepcopy(self._env.sim.mj_model)
+        self._ghost_model.geom_rgba[:] = self._ghost_color
+
       entity: Entity = self._env.scene[self.cfg.asset_name]
       indexing = entity.indexing
-
       free_joint_q_adr = indexing.free_joint_q_adr.cpu().numpy()
-      free_joint_pos_adr = free_joint_q_adr[:3]
-      free_joint_ori_adr = free_joint_q_adr[3:7]
       joint_q_adr = indexing.joint_q_adr.cpu().numpy()
 
-      self._data_viz.qpos[free_joint_pos_adr] = (
-        self.body_pos_w[i, 0].cpu().numpy().copy()
+      qpos = np.zeros(self._env.sim.mj_model.nq)
+      qpos[free_joint_q_adr[0:3]] = self.body_pos_w[visualizer.env_idx, 0].cpu().numpy()
+      qpos[free_joint_q_adr[3:7]] = (
+        self.body_quat_w[visualizer.env_idx, 0].cpu().numpy()
       )
-      self._data_viz.qpos[free_joint_ori_adr] = (
-        self.body_quat_w[i, 0].cpu().numpy().copy()
-      )
-      self._data_viz.qpos[joint_q_adr] = self.joint_pos[i].cpu().numpy().copy()
+      qpos[joint_q_adr] = self.joint_pos[visualizer.env_idx].cpu().numpy()
 
-      mujoco.mj_forward(self._model_viz, self._data_viz)
-      mujoco.mjv_addGeoms(
-        self._model_viz,
-        self._data_viz,
-        self._vopt,
-        self._pert,
-        self._catmask.value,
-        scn,
+      visualizer.add_ghost_mesh(qpos, model=self._ghost_model)
+
+    elif self.cfg.viz.mode == "frames":
+      desired_body_pos = self.body_pos_w[visualizer.env_idx].cpu().numpy()
+      desired_body_quat = self.body_quat_w[visualizer.env_idx]
+      desired_body_rotm = matrix_from_quat(desired_body_quat).cpu().numpy()
+
+      current_body_pos = self.robot_body_pos_w[visualizer.env_idx].cpu().numpy()
+      current_body_quat = self.robot_body_quat_w[visualizer.env_idx]
+      current_body_rotm = matrix_from_quat(current_body_quat).cpu().numpy()
+
+      for i, body_name in enumerate(self.cfg.body_names):
+        visualizer.add_frame(
+          position=desired_body_pos[i],
+          rotation_matrix=desired_body_rotm[i],
+          scale=0.08,
+          label=f"desired_{body_name}",
+          axis_colors=_DESIRED_FRAME_COLORS,
+        )
+        visualizer.add_frame(
+          position=current_body_pos[i],
+          rotation_matrix=current_body_rotm[i],
+          scale=0.12,
+          label=f"current_{body_name}",
+        )
+
+      desired_anchor_pos = self.anchor_pos_w[visualizer.env_idx].cpu().numpy()
+      desired_anchor_quat = self.anchor_quat_w[visualizer.env_idx]
+      desired_rotation_matrix = matrix_from_quat(desired_anchor_quat).cpu().numpy()
+      visualizer.add_frame(
+        position=desired_anchor_pos,
+        rotation_matrix=desired_rotation_matrix,
+        scale=0.1,
+        label="desired_anchor",
+        axis_colors=_DESIRED_FRAME_COLORS,
+      )
+
+      current_anchor_pos = self.robot_anchor_pos_w[visualizer.env_idx].cpu().numpy()
+      current_anchor_quat = self.robot_anchor_quat_w[visualizer.env_idx]
+      current_rotation_matrix = matrix_from_quat(current_anchor_quat).cpu().numpy()
+      visualizer.add_frame(
+        position=current_anchor_pos,
+        rotation_matrix=current_rotation_matrix,
+        scale=0.15,
+        label="current_anchor",
       )
 
 
@@ -436,7 +469,15 @@ class MotionCommandCfg(CommandTermCfg):
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   velocity_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   joint_position_range: tuple[float, float] = (-0.52, 0.52)
-  adaptive_kernel_size: int = 3
+  adaptive_kernel_size: int = 1
   adaptive_lambda: float = 0.8
   adaptive_uniform_ratio: float = 0.1
   adaptive_alpha: float = 0.001
+  disable_adaptive_sampling: bool = False
+
+  @dataclass
+  class VizCfg:
+    mode: Literal["ghost", "frames"] = "ghost"
+    ghost_color: tuple[float, float, float, float] = (0.5, 0.7, 0.5, 0.5)
+
+  viz: VizCfg = field(default_factory=VizCfg)
