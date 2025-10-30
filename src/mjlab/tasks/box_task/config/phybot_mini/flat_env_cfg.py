@@ -2,7 +2,7 @@ from dataclasses import dataclass, replace
 
 from mjlab.asset_zoo.robots.phybot_mini.phybot_mini_constants_for_tracking import phybot_ACTION_SCALE, phybot_ROBOT_CFG,Carrying_Box_CFG
 from mjlab.tasks.box_task.tracking_env_cfg import TrackingEnvCfg
-from mjlab.utils.spec_config import ContactSensorCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 
 @dataclass

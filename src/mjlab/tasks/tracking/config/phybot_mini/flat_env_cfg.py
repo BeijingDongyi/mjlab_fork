@@ -2,24 +2,24 @@ from dataclasses import dataclass, replace
 
 from mjlab.asset_zoo.robots.phybot_mini.phybot_mini_constants_for_tracking import phybot_ACTION_SCALE, phybot_ROBOT_CFG,Carrying_Box_CFG
 from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
-from mjlab.utils.spec_config import ContactSensorCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 
 @dataclass
 class PhybotC1FlatEnvCfg(TrackingEnvCfg):
   def __post_init__(self):
-    self_collision_sensor = ContactSensorCfg(
-      name="self_collision",
-      subtree1="base_link",
-      subtree2="base_link",
-      data=("found",),
-      reduce="netforce",
-      num=10,  # Report up to 10 contacts.
-    )
-    phybot_config = replace(phybot_ROBOT_CFG, sensors=(self_collision_sensor,))
+    self.scene.entities = {"robot": replace(phybot_ROBOT_CFG)}
 
-    self.scene.entities = {"robot": phybot_config,
-                           "box":Carrying_Box_CFG}
+    self_collision_cfg = ContactSensorCfg(
+      name="self_collision",
+      primary=ContactMatch(mode="subtree", pattern="base_link", entity="robot"),
+      secondary=ContactMatch(mode="subtree", pattern="base_link", entity="robot"),
+      fields=("found",),
+      reduce="none",
+      num_slots=1,
+    )
+    self.scene.sensors = (self_collision_cfg)
+
     self.actions.joint_pos.scale = phybot_ACTION_SCALE
 
     self.commands.motion.anchor_body_name = "waist_yaw"

@@ -6,8 +6,8 @@ import torch
 
 from mjlab.sensor import ContactSensor
 
-# from mjlab.entity import Entity
-# from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.entity import Entity
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.third_party.isaaclab.isaaclab.utils.math import quat_error_magnitude
 
 from .commands import MotionCommand
@@ -15,8 +15,8 @@ from .commands import MotionCommand
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
-# _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
-# _BOX_CFG = SceneEntityCfg("box")
+_DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+_BOX_CFG = SceneEntityCfg("box")
 
 def _get_body_indexes(
   command: MotionCommand, body_names: Optional[list[str]]
@@ -124,12 +124,12 @@ def self_collision_cost(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tenso
   assert sensor.data.found is not None
   return sensor.data.found.squeeze(-1)
 
-# ###box task
-# def catching_point(
-#         env: ManagerBasedRlEnv,
-#         sensor_name: str,
-#         asset_cfg: SceneEntityCfg = _BOX_CFG,
-# )
+###box task
+# def catching_point(env: ManagerBasedRlEnv,robot: _DEFAULT_ASSET_CFG,box:_BOX_CFG) -> torch.Tensor:
+#     hand_left_site = env.scene["robot/"]
+#     hand_right_site = env.scene[site_name]
+#     box_left_site = env.scene[]
+#     box_right_site = env.scene[]
 #     return 0
-#
+
 # def contacting

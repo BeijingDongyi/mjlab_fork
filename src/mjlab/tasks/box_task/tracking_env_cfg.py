@@ -109,13 +109,13 @@ class ObservationCfg:
     base_lin_vel: ObsTerm | None = term(
       ObsTerm,
       func=mdp.builtin_sensor,
-      params={"sensor_name": "robot/imu_lin_vel"},
+      params={"sensor_name": "robot/linear-velocity"},
       noise=Unoise(n_min=-0.5, n_max=0.5),
     )
     base_ang_vel: ObsTerm = term(
       ObsTerm,
       func=mdp.builtin_sensor,
-      params={"sensor_name": "robot/imu_ang_vel"},
+      params={"sensor_name": "robot/angular-velocity"},
       noise=Unoise(n_min=-0.2, n_max=0.2),
     )
     joint_pos: ObsTerm = term(
@@ -147,10 +147,10 @@ class ObservationCfg:
       ObsTerm, func=mdp.robot_body_ori_b, params={"command_name": "motion"}
     )
     base_lin_vel: ObsTerm = term(
-      ObsTerm, func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_lin_vel"}
+      ObsTerm, func=mdp.builtin_sensor, params={"sensor_name": "robot/linear-velocity"}
     )
     base_ang_vel: ObsTerm = term(
-      ObsTerm, func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"}
+      ObsTerm, func=mdp.builtin_sensor, params={"sensor_name": "robot/angular-velocity"}
     )
     joint_pos: ObsTerm = term(ObsTerm, func=mdp.joint_pos_rel)
     joint_vel: ObsTerm = term(ObsTerm, func=mdp.joint_vel_rel)

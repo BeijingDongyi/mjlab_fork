@@ -7,7 +7,6 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactSensor
-from mjlab.sensor.sensor import Sensor as Sensor
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
