@@ -11,7 +11,7 @@
       <geom name="floating_box_collision"
         type="box"
         pos="-1.6 0 0.2"
-        size="0.1 0.1 0.2"
+        size="0.1 0.1 0.19999"
         rgba="0.3 0.3 0.3 0.3"
         contype="1"
         conaffinity="1"/>
@@ -19,4 +19,8 @@
       <site name="grasp_right" pos="-1.6 0.1 0.15" size="0.03" rgba="0 0 1 1"/>
     </body>
   </worldbody>
+  <sensor>
+      <force name="grasp_left_force" site="grasp_left"/>
+      <force name="grasp_right_force" site="grasp_right"/>
+  </sensor>
 </mujoco>

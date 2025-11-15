@@ -13,8 +13,8 @@ from rsl_rl.runners import OnPolicyRunner
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
+from mjlab.tasks.box_task.rl import MotionTrackingOnPolicyRunner
+from mjlab.tasks.box_task.tracking_env_cfg import TrackingEnvCfg
 from mjlab.third_party.isaaclab.isaaclab_tasks.utils.parse_cfg import (
   load_cfg_from_registry,
 )
@@ -25,7 +25,6 @@ from mjlab.viewer.base import EnvProtocol
 
 ViewerChoice = Literal["auto", "native", "viser"]
 ResolvedViewer = Literal["native", "viser"]
-
 
 @dataclass(frozen=True)
 class PlayConfig:

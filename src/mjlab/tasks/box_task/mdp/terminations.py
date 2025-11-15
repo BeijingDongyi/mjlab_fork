@@ -77,7 +77,6 @@ def bad_motion_body_pos_z_only(
   body_names: Optional[list[str]] = None,
 ) -> torch.Tensor:
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
-
   body_indexes = _get_body_indexes(command, body_names)
   error = torch.abs(
     command.body_pos_relative_w[:, body_indexes, -1]

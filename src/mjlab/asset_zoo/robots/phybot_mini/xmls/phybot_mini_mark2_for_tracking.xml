@@ -261,6 +261,8 @@
     <gyro name="angular-velocity" site="site_imu" noise="0.005" cutoff="34.9"/>
     <velocimeter name="linear-velocity" site="site_imu" noise="0.001" cutoff="30"/>
     <magnetometer name="magnetometer" site="site_imu"/>
+    <force name="hand_left_touch"  site="left_hand"/>
+    <force name="hand_right_touch" site="right_hand"/>
   </sensor>
 
 <!--  <keyframe>-->

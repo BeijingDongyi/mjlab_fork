@@ -35,7 +35,7 @@ def reset_scene_to_default(env: ManagerBasedEnv, env_ids: torch.Tensor | None) -
       continue
 
     default_root_state = entity.data.default_root_state[env_ids].clone()
-    default_root_state[:, 0:3] += env.scene.env_origins[env_ids]
+    default_root_state[:, 0:3] += env.scene.env_origins[env_ids]#重置时要加origins
     entity.write_root_state_to_sim(default_root_state, env_ids=env_ids)
 
     default_joint_pos = entity.data.default_joint_pos[env_ids].clone()

@@ -363,8 +363,9 @@ class MotionCommand(CommandTerm):
     self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
 
     ####reset box
-    box_default_state = self.box.data.default_root_state
-    box_state = box_default_state[env_ids].clone()
+    box_default_state = self.box.data.default_root_state.clone()
+    box_default_state[env_ids, 0:3] += self._env.scene.env_origins[env_ids]#重置时要加origins
+    box_state = box_default_state[env_ids]
     self.box.write_root_state_to_sim(box_state, env_ids=env_ids)
     self.box.clear_state(env_ids=env_ids)
     ###

@@ -256,6 +256,7 @@ class RewardCfg:
   )
 
   action_rate_l2: RewTerm = term(RewTerm, func=mdp.action_rate_l2, weight=-1e-1)
+
   joint_limit: RewTerm = term(
     RewTerm,
     func=mdp.joint_pos_limits,
@@ -269,7 +270,31 @@ class RewardCfg:
     params={"sensor_name": "self_collision"},
   )
 
+  box_task: RewTerm = term(
+      RewTerm,
+      func=mdp.TaskRewardModule,
+      weight=1.0,
+      params={"command_name": "motion"}
+  )
 
+  # 2) 拆开的各项（可单独监控）
+  catching_point: RewTerm = term(
+      RewTerm, func=mdp.catching_point, weight=1.0, params={}
+  )
+
+  box_target_position_reward: RewTerm = term(
+      RewTerm, func=mdp.box_target_position_reward, weight=0.5,
+      params={"target_xy": (0.3, 0.0)}
+  )
+
+  box_smooth_motion_reward: RewTerm = term(
+      RewTerm, func=mdp.box_smooth_motion_reward, weight=0.3, params={}
+  )
+
+  box_grasp_force_reward: RewTerm = term(
+      RewTerm, func=mdp.box_grasp_force_reward, weight=0.3,
+      params={"F_target": 20.0, "sigma": 5.0}
+  )
 @dataclass
 class TerminationsCfg:
   time_out: DoneTerm = term(DoneTerm, func=mdp.time_out, time_out=True)
